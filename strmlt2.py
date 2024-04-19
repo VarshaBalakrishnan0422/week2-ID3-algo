@@ -1,46 +1,121 @@
 import streamlit as st
-from sklearn import datasets
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier, plot_tree
-import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
-# Load the Iris dataset
-iris = datasets.load_iris()
-X = iris.data
-y = iris.target
+class Node:
+    def __init__(self, feature_index=None, threshold=None, left=None, right=None, value=None):
+        self.feature_index = feature_index
+        self.threshold = threshold
+        self.left = left
+        self.right = right
+        self.value = value  # Value if node is leaf
 
-# Split the dataset into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+class DecisionTree:
+    def __init__(self, max_depth=None):
+        self.max_depth = max_depth
 
-# Train the Decision Tree classifier
-clf = DecisionTreeClassifier()
-clf.fit(X_train, y_train)
+    def fit(self, X, y):
+        self.num_classes = len(np.unique(y))
+        self.num_features = X.shape[1]
+        self.tree = self._grow_tree(X, y)
 
-# Define function to predict class of new sample
-def predict_class(sample):
-    prediction = clf.predict([sample])
-    return iris.target_names[prediction[0]]
+    def _grow_tree(self, X, y, depth=0):
+        num_samples_per_class = [np.sum(y == i) for i in range(self.num_classes)]
+        predicted_class = np.argmax(num_samples_per_class)
+        node = Node(value=predicted_class)
+
+        # Stopping criteria
+        if depth < self.max_depth:
+            best_split = self._find_best_split(X, y)
+            if best_split is not None:
+                feature_index, threshold = best_split
+                indices_left = X[:, feature_index] < threshold
+                X_left, y_left = X[indices_left], y[indices_left]
+                X_right, y_right = X[~indices_left], y[~indices_left]
+                node = Node(feature_index=feature_index, threshold=threshold,
+                            left=self._grow_tree(X_left, y_left, depth + 1),
+                            right=self._grow_tree(X_right, y_right, depth + 1))
+        return node
+
+    def _find_best_split(self, X, y):
+        best_gini = 1
+        best_split = None
+        for feature_index in range(self.num_features):
+            thresholds = np.unique(X[:, feature_index])
+            for threshold in thresholds:
+                indices_left = X[:, feature_index] < threshold
+                gini = self._gini_impurity(y[indices_left], y[~indices_left])
+                if gini < best_gini:
+                    best_gini = gini
+                    best_split = (feature_index, threshold)
+        return best_split
+
+    def _gini_impurity(self, y_left, y_right):
+        p_left = len(y_left) / (len(y_left) + len(y_right))
+        p_right = len(y_right) / (len(y_left) + len(y_right))
+        gini = 1.0 - p_left**2 - p_right**2
+        return gini
+
+    def predict(self, X):
+        return np.array([self._predict_tree(x, self.tree) for x in X])
+
+    def _predict_tree(self, x, node):
+        if node.value is not None:
+            return node.value
+        if x[node.feature_index] < node.threshold:
+            return self._predict_tree(x, node.left)
+        else:
+            return self._predict_tree(x, node.right)
+
+    def visualize(self):
+        self._visualize_tree(self.tree)
+
+    def _visualize_tree(self, node, depth=0):
+        if node is None:
+            return
+
+        indent = "  " * depth
+        if node.value is not None:
+            st.write(indent + "Predicted class:", node.value)
+        else:
+            st.write(indent + "Feature:", node.feature_index, "Threshold:", node.threshold)
+            self._visualize_tree(node.left, depth + 1)
+            self._visualize_tree(node.right, depth + 1)
 
 # Streamlit app
-st.title('Decision Tree Classifier')
-st.sidebar.header('Input Sample')
+st.title("Decision Tree Classifier Demo")
 
-# Input fields for user to input new sample
-sepal_length = st.sidebar.slider('Sepal Length', float(X[:, 0].min()), float(X[:, 0].max()), float(X[:, 0].mean()))
-sepal_width = st.sidebar.slider('Sepal Width', float(X[:, 1].min()), float(X[:, 1].max()), float(X[:, 1].mean()))
-petal_length = st.sidebar.slider('Petal Length', float(X[:, 2].min()), float(X[:, 2].max()), float(X[:, 2].mean()))
-petal_width = st.sidebar.slider('Petal Width', float(X[:, 3].min()), float(X[:, 3].max()), float(X[:, 3].mean()))
+# Upload CSV file
+uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    
+    # Display dataset
+    st.write("Uploaded Dataset:")
+    st.write(df)
 
-# Show decision tree visualization
-st.subheader('Decision Tree Visualization')
-fig, ax = plt.subplots(figsize=(10, 7))
-plot_tree(clf, filled=True, feature_names=iris.feature_names, class_names=iris.target_names, ax=ax)
-st.pyplot(fig)
+    # Extract features and labels
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
 
-# Predict class of new sample
-sample = [sepal_length, sepal_width, petal_length, petal_width]
-predicted_class = predict_class(sample)
+    # Create Decision Tree classifier
+    clf = DecisionTree(max_depth=3)
+    clf.fit(X, y)
 
-# Display prediction
-st.subheader('Prediction')
-st.write('The predicted class for the given sample is:', predicted_class)
+    # Sidebar for input sample
+    st.sidebar.header("Input Sample")
+    sample = []
+    for i in range(df.shape[1] - 1):
+        sample.append(st.sidebar.slider(f"Feature {i+1}", float(df.iloc[:, i].min()), float(df.iloc[:, i].max()), float(df.iloc[:, i].mean())))
+
+    sample = np.array(sample)
+
+    # Sidebar button for classification
+    st.sidebar.header("Sample Classification")
+    if st.sidebar.button("Classify"):
+        prediction = clf.predict(sample.reshape(1, -1))
+        st.sidebar.success(f"The sample belongs to class {prediction[0]}.")
+
+    # Display decision tree visualization
+    st.header("Decision Tree Visualization")
+    clf.visualize()
